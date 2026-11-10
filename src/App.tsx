@@ -35,6 +35,10 @@ export default function App() {
       // Листа на сите неопходни релативни датотеки за CNC апликацијата
       const filesToInclude = [
         'index.html',
+        'Start_CNC_Dispenser.bat',
+        'bridge/Mach3Bridge.cpp',
+        'bridge/Build_Mach3Bridge.bat',
+        'bridge/README_BRIDGE.txt',
         'css/style.css',
         'js/app.js',
         'js/canvas.js',

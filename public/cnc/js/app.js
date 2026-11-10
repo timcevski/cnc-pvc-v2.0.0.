@@ -1007,6 +1007,9 @@ document.addEventListener('DOMContentLoaded', function() {
       refreshToolbarStates();
       CNCApp.Canvas.render();
       CNCApp.Storage.saveAutoSave();
+      if (CNCApp.Machine && CNCApp.Machine.activeDriverId === 'mach3' && CNCApp.Mach3BridgeDriver && CNCApp.Mach3BridgeDriver.connected) {
+        CNCApp.Mach3BridgeDriver.syncConfig();
+      }
     };
   }
 
@@ -1064,6 +1067,9 @@ document.addEventListener('DOMContentLoaded', function() {
     CNCApp.Table.render();
     CNCApp.Canvas.render();
     CNCApp.Storage.saveAutoSave();
+    if (CNCApp.Machine && CNCApp.Machine.activeDriverId === 'mach3' && CNCApp.Mach3BridgeDriver && CNCApp.Mach3BridgeDriver.connected) {
+      CNCApp.Mach3BridgeDriver.syncConfig();
+    }
     modal.style.display = 'none';
   };
 
@@ -1089,6 +1095,9 @@ document.addEventListener('DOMContentLoaded', function() {
         CNCApp.Table.render();
         CNCApp.Canvas.render();
         CNCApp.Storage.saveAutoSave();
+        if (CNCApp.Machine && CNCApp.Machine.activeDriverId === 'mach3' && CNCApp.Mach3BridgeDriver && CNCApp.Mach3BridgeDriver.connected) {
+          CNCApp.Mach3BridgeDriver.syncConfig();
+        }
       } catch(err) { alert('Невалиден профил!'); }
     };
     r.readAsText(f);

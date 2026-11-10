@@ -52,7 +52,7 @@ CNCApp.Mach3BridgeDriver = {
 
     try {
       xhr.open(method, this.baseUrl + path, true);
-      xhr.timeout = 2500;
+      xhr.timeout = (String(method).toUpperCase() === 'GET' && path === '/status') ? 1800 : 6000;
       if (bodyObj !== null && bodyObj !== undefined) {
         xhr.setRequestHeader('Content-Type', 'application/json');
       }
@@ -150,6 +150,31 @@ CNCApp.Mach3BridgeDriver = {
     };
   },
 
+  _buildConfigPayload: function(machineObj) {
+    var m = machineObj || (CNCApp.State ? CNCApp.State.machine : {}) || {};
+    var list = Array.isArray(m.dispensers) ? m.dispensers : [];
+    var outDisp = [];
+    for (var i = 0; i < list.length; i++) {
+      outDisp.push({
+        id: list[i].id,
+        lowerCmd: list[i].lowerCmd || ('M' + (103 + list[i].id)),
+        raiseCmd: list[i].raiseCmd || ('M' + (203 + list[i].id))
+      });
+    }
+    return {
+      valveOpenCmd: m.valveOpenCmd || 'M103',
+      valveCloseCmd: m.valveCloseCmd || 'M203',
+      dispensers: outDisp
+    };
+  },
+
+  syncConfig: function(cb) {
+    var payload = this._buildConfigPayload();
+    this._request('POST', '/config', payload, function(err, data) {
+      if (typeof cb === 'function') cb(err, data);
+    });
+  },
+
   connect: function(cb) {
     var self = this;
     this._request('GET', '/status', null, function(err, data) {
@@ -161,6 +186,14 @@ CNCApp.Mach3BridgeDriver = {
       }
       self.connected = true;
       var snap = self._applyRemoteSnapshot(data);
+      self.syncConfig();
+      if (CNCApp.Storage) {
+        if (typeof CNCApp.Storage.syncOrRecoverBridgeTemp === 'function') {
+          CNCApp.Storage.syncOrRecoverBridgeTemp();
+        } else if (typeof CNCApp.Storage.saveToBridgeTemp === 'function') {
+          CNCApp.Storage.saveToBridgeTemp();
+        }
+      }
       if (typeof cb === 'function') cb(null, snap);
     });
   },
@@ -196,9 +229,13 @@ CNCApp.Mach3BridgeDriver = {
       return;
     }
     var self = this;
+    var cfg = this._buildConfigPayload(meta && meta.machine ? meta.machine : null);
     var payload = {
       gcode: gcodeText,
-      filename: (meta && meta.projectName) ? meta.projectName : 'active_job.tap'
+      filename: (meta && meta.projectName) ? meta.projectName : 'active_job.tap',
+      valveOpenCmd: cfg.valveOpenCmd,
+      valveCloseCmd: cfg.valveCloseCmd,
+      dispensers: cfg.dispensers
     };
     this._request('POST', '/load_and_run', payload, function(err, data) {
       if (err) {
@@ -291,10 +328,18 @@ CNCApp.Mach3BridgeDriver = {
     var valveOpenCmd = String(m.valveOpenCmd || 'M103').toUpperCase().trim();
     var valveCloseCmd = String(m.valveCloseCmd || 'M203').toUpperCase().trim();
 
-    this._request('POST', '/mdi', { cmd: String(cmdStr || '') }, function(err, data) {
+    var bodyObj = { cmd: String(cmdStr || '') };
+    if (upper.indexOf('PULSE:') === 0) {
+      bodyObj.openCmd = valveOpenCmd;
+      bodyObj.closeCmd = valveCloseCmd;
+    }
+
+    this._request('POST', '/mdi', bodyObj, function(err, data) {
       if (err) { if (typeof cb === 'function') cb(err); return; }
 
-      if (upper === valveOpenCmd) {
+      if (upper.indexOf('PULSE:') === 0) {
+        self.coords.valveOpen = true;
+      } else if (upper === valveOpenCmd) {
         self.coords.valveOpen = true;
       } else if (upper === valveCloseCmd) {
         self.coords.valveOpen = false;
@@ -323,22 +368,13 @@ CNCApp.Mach3BridgeDriver = {
     for (var i = 0; i < list.length; i++) {
       if (list[i].raiseCmd) cmds.push(list[i].raiseCmd);
     }
-    var idx = 0;
-    function next() {
-      if (idx >= cmds.length) {
-        self.coords.loweredDispensers = [];
-        if (typeof cb === 'function') cb(null, self.getSnapshot());
+    this._request('POST', '/mdi', { cmd: 'RAISE_ALL', raiseCmds: cmds }, function(err, data) {
+      if (err) {
+        if (typeof cb === 'function') cb(err);
         return;
       }
-      var c = cmds[idx++];
-      self._request('POST', '/mdi', { cmd: c }, function(err, data) {
-        if (err) {
-          if (typeof cb === 'function') cb(err);
-          return;
-        }
-        next();
-      });
-    }
-    next();
+      self.coords.loweredDispensers = [];
+      if (typeof cb === 'function') cb(null, self._applyRemoteSnapshot(data));
+    });
   }
 };

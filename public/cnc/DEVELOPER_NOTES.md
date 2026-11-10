@@ -311,4 +311,25 @@
   - Режим `🎯 Оди на клик` (F3000, меѓусебно исклучив со `➕ Точка`) за директно носење на избраниот диспензер до кликнатата точка на платното + визуелна испрекината граница на дофат (`Дофат Дk`).
   - Машински софт-лимити (`minX: -5`, `maxX: 350`, `minY: -5`, `maxY: 300`, и `moveClickSpeed: 3000`, прилагодливи во `⚙️ Поставки`) со проверка при Jog, Оди на клик, `▶ Пушти активен таб` и `⚡ Експорт G-Код`.
 * Вградена безбедносна заштита при работа (`RUNNING` / `HOLD`): активниот таб се заклучува во **Read-Only режим** (`🔒`), глобалните команди кон машината и `⚙️ Поставки` се заклучени низ сите табови, вграден е избор за **Строг режим** (заклучување на менување табови), предупредување за процесорско оптоварување кај SVG генераторот (за Windows XP / LPT) и заштита од случајно затворање на прелистувачот (`beforeunload`).
+* **Жива визуелна индикација за активност на диспензерите (поправка на пребришување и контраст):**
+  - `renderDispenserButtons()` ги ажурира постоечките `<button>` елементи *in-place* (преку `data-disp-sig`) наместо да го брише `innerHTML` на секое освежување, со што не се губат кликови и не се прекинуваат CSS транзициите.
+  - Додаден е статус-беџ **`#dispActiveBadge`** покрај насловот „Диспензери:“ (`⬆ Горе` / `⬇ Д1 ДОЛЕ` / `⬇ Д1,Д3 ДОЛЕ`).
+  - Спуштените диспензери (`.disp-toggle-btn.is-lowered`) и отворениот вентил (`.valve-btn.valve-open`) задржуваат `opacity: 1`, истакната рамка/прстен и притисната длабочина дури и кога се `:disabled` за време на `RUNNING`, со забрзано `50 ms` освежување на Симулаторот (и `100 ms` за Mach3) за сите движења горе-доле да се гледаат во реално време.
 * Одлука за **Фаза 2.0-D**: `Mach3Bridge.exe` ќе биде напишан на чист 32-bit x86 **C++ Win32 без .NET зависности** (`Winsock2` + COM `IDispatch` `Mach4.Document`).
+
+### Верзија 2.0 — Фаза 2.0-D (Чист C++ `Mach3Bridge`, `Start_CNC_Dispenser.bat`, `./temp/` менаџер и Crash Recovery)
+
+* **Нативен 32-bit Win32 C++ COM мост (`bridge/Mach3Bridge.cpp`):**
+  * Напишан целосно во Win32 C++ (`Winsock2` локален HTTP сервер на `127.0.0.1:8765` + посебна COM STA работничка нишка со `GetActiveObject("Mach4.Document")` и `IDispatch` повици, без `.NET` и без надворешни DLL-а).
+  * Сите кирилични пораки за статус/грешки се енкодирани како чисти ASCII `\xD0/\xD1` UTF-8 escape низи, без `\u04xx` литерали, за 100% сигурно компајлирање под постари XP MinGW/TDM-GCC и MSVC x86 компајлери.
+  * Поддржува `GET /status`, `POST /config`, `POST /load_and_run` (со `CRLF` нормализација за сигурно извршување на `M30`, атомично снимање во `./temp/active_job.tap`, `LoadFile` + `IsLoading` + `CycleStart`), `POST /pause`, `POST /resume`, `POST /stop` (со 600ms latch авто-синхронизација), `POST /reset` (toggle OEM 1021 само кога Reset LED 800 е активен), `POST /jog` (апсолутен `G90 G1` чекор од live DRO за да не заглави Mach3 во `G91`), `POST /zero` и `POST /mdi` (`PULSE:<ms>` неблокирачки тајмер, `RAISE_ALL` и заштитна блокада за движење при спуштени диспензери/отворен вентил).
+* **Скрипти за градење и стартување:**
+  * `bridge/Build_Mach3Bridge.bat`: 1-клик компајлирање на `..\Mach3Bridge.exe` (препознава `i686-w64-mingw32-g++`, `g++ -m32` со fallback без `-static` за XP TDM-GCC, или Visual Studio `cl.exe /MT`).
+  * `bridge/README_BRIDGE.txt`: детално упатство на македонски за еднократно градење и проверка (`http://127.0.0.1:8765/status`).
+  * `Start_CNC_Dispenser.bat`: го креира `./temp/`, минимизирано го стартува `Mach3Bridge.exe` (ако е компајлиран) и го отвора `index.html`.
+* **`./temp/` диск складиште и Crash Recovery (`js/storage.js`, `js/driver-mach3.js`, `js/machine-driver.js`, `js/app.js`):**
+  * `WriteFileAtomic` во `Mach3Bridge.cpp` користи `FlushFileBuffers` + `MOVEFILE_REPLACE_EXISTING` (без `MOVEFILE_WRITE_THROUGH` за целосна стабилност на FAT32 USB во Windows XP).
+  * `CNCApp.Storage.syncOrRecoverBridgeTemp()` (ES5, `XMLHttpRequest`) при поврзување со Mach3 проверува дали прелистувачот се подигнал во недопрено default-демо без `localStorage` (`_bootedWithoutLocalStorage`) и нуди враќање од `./temp/tabs_autosave.json`, а при надминат 5 MB `localStorage` лимит (`_loadedSlimLocalStorage`) тивко ги дополнува неактивните SVG од диск.
+  * Во `js/driver-mach3.js`: timeout `1800 ms` за брз `GET /status` и `6000 ms` за COM `POST` акции (`/load_and_run`). Во `js/machine-driver.js`: приоритетен приказ на `this.lastError` кога `Mach3Bridge` чека `Mach3.exe`. Во `js/app.js`: автоматски `syncConfig()` при снимање поставки, ресет на калибрација и увоз на профил `.json`.
+  * Ажурирани `src/App.tsx` (ZIP пакет `CNC-Dispenser-V2.0.zip` ги содржи `Start_CNC_Dispenser.bat` и целата папка `bridge/`), `V2_TECHNICAL_PLAN.md` и `DEVELOPER_NOTES.md`.
+

@@ -267,6 +267,7 @@ CNCApp.Machine = {
   _startPolling: function() {
     this._stopPolling();
     var self = this;
+    var pollMs = (this.activeDriverId === 'simulator') ? 50 : 100;
     this._pollTimer = setInterval(function() {
       var drv = CNCApp.MachineDriver.getActive();
       if (!drv || !self.isConnected()) return;
@@ -278,7 +279,7 @@ CNCApp.Machine = {
         }
         if (snap) self._applySnapshot(snap);
       });
-    }, 100);
+    }, pollMs);
   },
 
   _stopPolling: function() {
@@ -991,33 +992,57 @@ CNCApp.Machine = {
     var list = (CNCApp.State.machine && CNCApp.State.machine.dispensers) ? CNCApp.State.machine.dispensers : [];
     var self = this;
 
-    container.innerHTML = '';
-    for (var i = 0; i < list.length; i++) {
-      (function(d) {
-        var btn = document.createElement('button');
-        btn.type = 'button';
-        var isLower = self.isDispenserLowered(d.id);
-        btn.className = 'btn btn-xs disp-toggle-btn' + (isLower ? ' is-lowered' : '');
-        btn.innerText = d.id + (isLower ? ' ⬇' : ' ⬆');
-        btn.title = d.name + (isLower ? ' — СПУШТЕН (клик за кревање ' + (d.raiseCmd || '') + ')' : ' — ГОРЕ (клик за спуштање ' + (d.lowerCmd || '') + ')');
-        btn.disabled = manualLocked;
+    // Не ги бриши постоечките копчиња на секои 50-100ms polling за да не се губи клик на глувчето!
+    var sigParts = [];
+    for (var k = 0; k < list.length; k++) {
+      sigParts.push(list[k].id + ':' + (list[k].name || '') + ':' + (list[k].color || '') + ':' + (list[k].lowerCmd || '') + ':' + (list[k].raiseCmd || ''));
+    }
+    var sig = sigParts.join('|');
 
-        if (isLower) {
-          btn.style.background = d.color || '#2563eb';
-          btn.style.borderColor = d.color || '#1d4ed8';
-          btn.style.color = '#ffffff';
-        } else {
-          btn.style.background = '#ffffff';
-          btn.style.borderColor = '#cbd5e1';
-          btn.style.borderBottom = '2px solid ' + (d.color || '#2563eb');
-          btn.style.color = '#1e293b';
-        }
+    if (container.getAttribute('data-disp-sig') !== sig || container.children.length !== list.length) {
+      container.innerHTML = '';
+      for (var i = 0; i < list.length; i++) {
+        (function(d) {
+          var btn = document.createElement('button');
+          btn.type = 'button';
+          btn.setAttribute('data-disp-id', String(d.id));
+          btn.onclick = function() {
+            var targetId = parseInt(btn.getAttribute('data-disp-id'), 10);
+            if (!isNaN(targetId)) self.toggleDispenser(targetId);
+          };
+          container.appendChild(btn);
+        })(list[i]);
+      }
+      container.setAttribute('data-disp-sig', sig);
+    }
 
-        btn.onclick = function() {
-          self.toggleDispenser(d.id);
-        };
-        container.appendChild(btn);
-      })(list[i]);
+    for (var j = 0; j < list.length; j++) {
+      var d = list[j];
+      var btn = container.children[j];
+      if (!btn) continue;
+
+      var isLower = self.isDispenserLowered(d.id);
+      var desiredText = d.id + (isLower ? ' ⬇' : ' ⬆');
+      var desiredClass = 'btn btn-xs disp-toggle-btn' + (isLower ? ' is-lowered' : '');
+      var desiredTitle = d.name + (isLower ? ' — СПУШТЕН (клик за кревање ' + (d.raiseCmd || '') + ')' : ' — ГОРЕ (клик за спуштање ' + (d.lowerCmd || '') + ')');
+
+      if (btn.innerText !== desiredText) btn.innerText = desiredText;
+      if (btn.className !== desiredClass) btn.className = desiredClass;
+      if (btn.title !== desiredTitle) btn.title = desiredTitle;
+      if (btn.disabled !== manualLocked) btn.disabled = manualLocked;
+
+      var col = d.color || '#2563eb';
+      if (isLower) {
+        btn.style.background = col;
+        btn.style.borderColor = col;
+        btn.style.borderBottom = '1px solid ' + col;
+        btn.style.color = '#ffffff';
+      } else {
+        btn.style.background = '';
+        btn.style.borderColor = '';
+        btn.style.borderBottom = '2px solid ' + col;
+        btn.style.color = '#1e293b';
+      }
     }
   },
 
@@ -1102,6 +1127,11 @@ CNCApp.Machine = {
         safetyBanner.className = 'machine-banner banner-warn';
         safetyBanner.style.display = 'flex';
         if (btnJump) btnJump.style.display = 'none';
+      } else if (isEstop && this.lastError) {
+        safetyText.innerText = '⚠️ ' + this.lastError;
+        safetyBanner.className = 'machine-banner banner-danger';
+        safetyBanner.style.display = 'flex';
+        if (btnJump) btnJump.style.display = 'none';
       } else if (isEstop) {
         safetyText.innerText = '⏹ Машината е сопрена (СТОП). Притиснете „🔄 Reset“ пред повторно пуштање.';
         safetyBanner.className = 'machine-banner banner-danger';
@@ -1182,8 +1212,25 @@ CNCApp.Machine = {
     this._setDisabled('btnCmdHomeRef', manualLocked);
     this._setDisabled('btnCmdParkPos', manualLocked);
 
-    // Освежи ги динамичките копчиња за диспензери
+    // Освежи ги динамичките копчиња за диспензери и статус-беџот
     this.renderDispenserButtons();
+
+    var dispBadge = document.getElementById('dispActiveBadge');
+    if (dispBadge) {
+      if (!connected) {
+        dispBadge.innerText = '—';
+        dispBadge.className = 'disp-status-pill';
+      } else {
+        var curLow = (this.coords && Array.isArray(this.coords.loweredDispensers)) ? this.coords.loweredDispensers : [];
+        if (curLow.length > 0) {
+          dispBadge.innerText = '⬇ Д' + curLow.join(',Д') + ' ДОЛЕ';
+          dispBadge.className = 'disp-status-pill is-down';
+        } else {
+          dispBadge.innerText = '⬆ Горе';
+          dispBadge.className = 'disp-status-pill is-up';
+        }
+      }
+    }
 
     // Копче за вентил
     var btnValve = document.getElementById('btnMachineValve');
